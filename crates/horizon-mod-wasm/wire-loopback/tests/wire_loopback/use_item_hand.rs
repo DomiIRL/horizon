@@ -158,6 +158,7 @@ fn generated_guest_item_dispatch_preserves_hands_sides_and_results() {
                         mod_api::HostSide::Server(&mut world)
                     },
                     &mut mod_api::EntityInteractEvent {
+                        dimension: "minecraft:overworld",
                         hand,
                         entity: 42,
                         kind: "minecraft:zombie",
