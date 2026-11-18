@@ -200,7 +200,7 @@ fn hanging_break_names_the_nether_it_happens_in() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_hanging(|game| {
-            game.dim = super::super::Dim::Nether;
+            game.dim = super::Dim::Nether;
             assert!(!game.break_frame_by(0, None), "the listener kept the frame");
             assert_eq!(*seen.lock().unwrap(), vec!["minecraft:the_nether"]);
         });
