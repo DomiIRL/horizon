@@ -21,8 +21,9 @@ impl Hub {
         flags: u8,
     ) {
         if self.recording() {
-            let record = self.guests[i].record.get_or_insert_default();
-            record.moved(pos, rot, flags);
+            self.guests.update(i, |g| {
+                g.record.get_or_insert_default().moved(pos, rot, flags);
+            });
         }
     }
 
@@ -31,9 +32,12 @@ impl Hub {
     pub(super) fn anticheat_pong(&mut self, i: usize, id: i32) {
         let ticks = self.ticks;
         if self.recording() {
-            let record = self.guests[i].record.get_or_insert_default();
-            // Ids are server ticks, cut to 32 bits.
-            record.pong(u64::from(id as u32), ticks);
+            self.guests.update(i, |g| {
+                // Ids are server ticks, cut to 32 bits.
+                g.record
+                    .get_or_insert_default()
+                    .pong(u64::from(id as u32), ticks);
+            });
         }
     }
 
@@ -46,7 +50,7 @@ impl Hub {
         }
         // What the tick sent the players that changes their movement went out before this ping.
         let ticks = self.ticks;
-        for g in &mut self.guests {
+        self.guests.update_all(|g| {
             let changes = std::mem::take(
                 g.changes
                     .get_mut()
@@ -57,7 +61,7 @@ impl Hub {
                     record.changed(ticks, change);
                 }
             }
-        }
+        });
         let ping = horizon_protocol::packets::play::Clientbound::Ping(
             horizon_protocol::packets::configuration::Ping {
                 id: self.ticks as u32 as i32,
