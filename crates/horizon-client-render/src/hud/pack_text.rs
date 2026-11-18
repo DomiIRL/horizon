@@ -47,7 +47,11 @@ pub(super) fn load_core(
 ) -> Option<Arc<CoreProgram>> {
     // The game passes the packs' resolved source as both: a shader is the pack's own when it
     // differs from the layer the packs were resolved over.
-    let defaults = defaults.underlay().unwrap_or(defaults);
+    let defaults = if defaults.same_generation(root) {
+        defaults.underlay().unwrap_or(defaults)
+    } else {
+        defaults
+    };
     let read = |base: &ResourceSource, path: &str| base.read_to_string(path).ok();
     let own =
         |path: &str| read(root, path).filter(|text| read(defaults, path).as_ref() != Some(text));
@@ -345,8 +349,8 @@ mod tests {
     #[test]
     fn a_packs_text_shader_is_used_from_the_resolved_source() {
         use crate::resource_source::Resource;
-        let dir = std::env::temp_dir().join(format!("horizon-pack-text-{}", std::process::id()));
-        let (vanilla, pack) = (dir.join("vanilla"), dir.join("pack"));
+        let dir = tempfile::tempdir().unwrap();
+        let (vanilla, pack) = (dir.path().join("vanilla"), dir.path().join("pack"));
         let vsh = "assets/minecraft/shaders/core/text.vsh";
         let fsh = "assets/minecraft/shaders/core/text.fsh";
         for (root, vertex) in [
@@ -371,7 +375,11 @@ mod tests {
         let resolved = ResourceSource::layered(files, base.clone());
         assert!(load(&resolved, &resolved).is_some(), "the pack's shader");
         assert!(load(&base, &base).is_none(), "vanilla's own draws natively");
-        let _ = std::fs::remove_dir_all(&dir);
+        let explicit = ResourceSource::directory(pack.clone());
+        assert!(
+            load(&resolved, &explicit).is_none(),
+            "a caller's own defaults stay the baseline"
+        );
     }
 
     #[test]
