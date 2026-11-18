@@ -349,14 +349,20 @@ mod tests {
         let (vanilla, pack) = (dir.join("vanilla"), dir.join("pack"));
         let vsh = "assets/minecraft/shaders/core/text.vsh";
         let fsh = "assets/minecraft/shaders/core/text.fsh";
-        for (root, vertex) in [(&vanilla, VSH.to_owned()), (&pack, VSH.replace("1.0)", "2.0)"))] {
+        for (root, vertex) in [
+            (&vanilla, VSH.to_owned()),
+            (&pack, VSH.replace("1.0)", "2.0)")),
+        ] {
             std::fs::create_dir_all(root.join("assets/minecraft/shaders/core")).unwrap();
             std::fs::write(root.join(vsh), vertex).unwrap();
             std::fs::write(root.join(fsh), FSH).unwrap();
         }
         let base = ResourceSource::directory(vanilla.clone());
         let files = [
-            (vsh, Resource::file(ResourceSource::directory(pack.clone()), vsh.into())),
+            (
+                vsh,
+                Resource::file(ResourceSource::directory(pack.clone()), vsh.into()),
+            ),
             (fsh, Resource::file(base.clone(), fsh.into())),
         ]
         .into_iter()
