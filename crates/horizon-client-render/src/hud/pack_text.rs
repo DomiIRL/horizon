@@ -362,20 +362,24 @@ mod tests {
             std::fs::write(root.join(fsh), FSH).unwrap();
         }
         let base = ResourceSource::directory(vanilla.clone());
-        let files = [
-            (
-                vsh,
-                Resource::file(ResourceSource::directory(pack.clone()), vsh.into()),
-            ),
-            (fsh, Resource::file(base.clone(), fsh.into())),
-        ]
-        .into_iter()
-        .map(|(name, resource)| (name.to_owned(), resource))
-        .collect();
-        let resolved = ResourceSource::layered(files, base.clone());
+        let resolve = || {
+            let files = [
+                (
+                    vsh,
+                    Resource::file(ResourceSource::directory(pack.clone()), vsh.into()),
+                ),
+                (fsh, Resource::file(base.clone(), fsh.into())),
+            ]
+            .into_iter()
+            .map(|(name, resource)| (name.to_owned(), resource))
+            .collect();
+            ResourceSource::layered(files, base.clone())
+        };
+        let resolved = resolve();
         assert!(load(&resolved, &resolved).is_some(), "the pack's shader");
         assert!(load(&base, &base).is_none(), "vanilla's own draws natively");
-        let explicit = ResourceSource::directory(pack.clone());
+        // Its own top layer holds the pack's shader; the vanilla one is only underneath.
+        let explicit = resolve();
         assert!(
             load(&resolved, &explicit).is_none(),
             "a caller's own defaults stay the baseline"
