@@ -87,7 +87,10 @@ and send then returns `UnsupportedPeer`
 without a packet. Horizon-branded peers must also answer the global raw transport
 revision mark on `horizon:payloads`, even with empty or all-optional declarations.
 Query is `[0, 1]`; Offer starts `[1, 1]` followed by the record count. A missing
-response or wrong revision refuses admission with a named raw-protocol cause.
+response or wrong revision refuses admission with a named raw-protocol cause. One
+exception: a client meeting a Horizon server that sent nothing on `horizon:payloads`
+(a build from before this negotiation) joins it like a vanilla server, with nothing
+negotiated, and skips that server's payloads on its declared channels.
 This is not a build authentication mechanism. Non-Horizon vanilla peers retain
 optional admission. Peers with no mod declarations exchange only protocol metadata and
 an Offer of the engine's optional declarations (below); there is no per-tick scan of
