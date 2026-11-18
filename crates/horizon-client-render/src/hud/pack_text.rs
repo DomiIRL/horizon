@@ -45,6 +45,9 @@ pub(super) fn load_core(
     defines: &[&str],
     glue: &Glue,
 ) -> Option<Arc<CoreProgram>> {
+    // The game passes the packs' resolved source as both: a shader is the pack's own when it
+    // differs from the layer the packs were resolved over.
+    let defaults = defaults.underlay().unwrap_or(defaults);
     let read = |base: &ResourceSource, path: &str| base.read_to_string(path).ok();
     let own =
         |path: &str| read(root, path).filter(|text| read(defaults, path).as_ref() != Some(text));
@@ -330,6 +333,40 @@ pub(super) fn text_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const VSH: &str = "#version 330\nin vec3 Position;\nin vec4 Color;\nin vec2 UV0;\n\
+        out vec4 vertexColor;\nout vec2 texCoord0;\n\
+        void main() {\n    gl_Position = vec4(Position, 1.0);\n    vertexColor = Color;\n    texCoord0 = UV0;\n}\n";
+    const FSH: &str = "#version 330\nuniform sampler2D Sampler0;\nin vec4 vertexColor;\nin vec2 texCoord0;\n\
+        out vec4 fragColor;\n\
+        void main() {\n    fragColor = texture(Sampler0, texCoord0) * vertexColor;\n}\n";
+
+    /// A server pack reaches the atlas as one resolved source passed as root and defaults.
+    #[test]
+    fn a_packs_text_shader_is_used_from_the_resolved_source() {
+        use crate::resource_source::Resource;
+        let dir = std::env::temp_dir().join(format!("horizon-pack-text-{}", std::process::id()));
+        let (vanilla, pack) = (dir.join("vanilla"), dir.join("pack"));
+        let vsh = "assets/minecraft/shaders/core/text.vsh";
+        let fsh = "assets/minecraft/shaders/core/text.fsh";
+        for (root, vertex) in [(&vanilla, VSH.to_owned()), (&pack, VSH.replace("1.0)", "2.0)"))] {
+            std::fs::create_dir_all(root.join("assets/minecraft/shaders/core")).unwrap();
+            std::fs::write(root.join(vsh), vertex).unwrap();
+            std::fs::write(root.join(fsh), FSH).unwrap();
+        }
+        let base = ResourceSource::directory(vanilla.clone());
+        let files = [
+            (vsh, Resource::file(ResourceSource::directory(pack.clone()), vsh.into())),
+            (fsh, Resource::file(base.clone(), fsh.into())),
+        ]
+        .into_iter()
+        .map(|(name, resource)| (name.to_owned(), resource))
+        .collect();
+        let resolved = ResourceSource::layered(files, base.clone());
+        assert!(load(&resolved, &resolved).is_some(), "the pack's shader");
+        assert!(load(&base, &base).is_none(), "vanilla's own draws natively");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_gui_projection_maps_gui_pixels_to_the_screen() {
