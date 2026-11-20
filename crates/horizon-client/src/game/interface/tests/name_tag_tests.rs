@@ -307,7 +307,7 @@ fn a_trades_title_draws_the_names_style() {
     let title: Vec<u32> = batch
         .vertices
         .iter()
-        .filter(|v| v.text == 1 && v.pos[1] >= oy + 6.0 && v.pos[1] <= oy + 14.0)
+        .filter(|v| v.pipeline == horizon_client_render::hud::HudVertex::GUI_TEXT && v.pos[1] >= oy + 6.0 && v.pos[1] <= oy + 14.0)
         .map(|v| v.color)
         .collect();
     assert!(!title.is_empty(), "the title draws glyphs");

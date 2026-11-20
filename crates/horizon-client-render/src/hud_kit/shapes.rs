@@ -95,7 +95,7 @@ impl HudBatch {
             color,
             depth: 0.0,
             glint_uv: [0.0, 0.0],
-            text: 0,
+            pipeline: crate::hud::HudVertex::NATIVE,
         });
     }
 

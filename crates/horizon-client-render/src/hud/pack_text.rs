@@ -3,7 +3,8 @@
 //! and text effects in its fragment shader. Without one the text draws natively.
 //!
 //! The same pipeline runs a pack's `core/position_tex_color` (`RenderPipelines.GUI_TEXTURED`) on
-//! the menu textures the GUI blits whole, each bound on its own as `Sampler0`.
+//! the menu textures the GUI blits whole, each bound on its own as `Sampler0`,
+//! and a pack's `core/gui` (`RenderPipelines.GUI`) on the GUI's fills.
 
 use crate::resource_source::ResourceSource;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::gfx::hud_coverage::Pipeline;
 /// triangles here, its corners top left, top right, bottom right, top left, bottom right, bottom
 /// left; vanilla's quads go top left, bottom left, bottom right, top right, which is what
 /// `gl_VertexID % 4` tells a pack's shader. The draw passes its first vertex as its instance.
+/// `core/gui`'s format (`POSITION_COLOR`) is the same without `UV0`.
 const GLUE: Glue = Glue {
     inputs: &[("Position", "vec3"), ("Color", "vec4"), ("UV0", "vec2")],
     prelude: "layout(location = 0) in vec2 hz_pos;\n\
@@ -83,7 +85,7 @@ pub(super) fn load_core(
     }
 }
 
-/// The packs' core shaders the atlas carries (text, block outline, sky, stars).
+/// The packs' core shaders the atlas carries (text, fills, block outline, sky, stars).
 pub(super) fn load_shaders(
     atlas: &mut super::HudAtlas,
     root: &ResourceSource,
@@ -92,6 +94,8 @@ pub(super) fn load_shaders(
     atlas.text_shaders.gui = load(root, defaults);
     // GUI_TEXTURED_SNIPPET sets no shader define.
     atlas.blit_shader = load_core(root, defaults, "position_tex_color", &[], &GLUE);
+    // GUI_SNIPPET sets no shader define.
+    atlas.gui_shader = load_core(root, defaults, "gui", &[], &GLUE);
     atlas.lines_shader = load_core(
         root,
         defaults,
@@ -360,17 +364,17 @@ fn uniforms(batch: &HudBatch, size: [u32; 2], scale: f32) -> Vec<u8> {
     bytemuck::cast_slice(&data).to_vec()
 }
 
-/// `range` split into runs of GUI text and of the rest, in order.
-pub(super) fn text_runs(
+/// `range` split into runs of one [`HudVertex::pipeline`] each, in order.
+pub(super) fn pipeline_runs(
     vertices: &[HudVertex],
     range: std::ops::Range<u32>,
-) -> Vec<(std::ops::Range<u32>, bool)> {
-    let mut runs: Vec<(std::ops::Range<u32>, bool)> = Vec::new();
+) -> Vec<(std::ops::Range<u32>, u32)> {
+    let mut runs: Vec<(std::ops::Range<u32>, u32)> = Vec::new();
     for i in range {
-        let text = vertices.get(i as usize).is_some_and(|v| v.text != 0);
+        let pipeline = vertices.get(i as usize).map_or(HudVertex::NATIVE, |v| v.pipeline);
         match runs.last_mut() {
-            Some((run, t)) if *t == text => run.end = i + 1,
-            _ => runs.push((i..i + 1, text)),
+            Some((run, p)) if *p == pipeline => run.end = i + 1,
+            _ => runs.push((i..i + 1, pipeline)),
         }
     }
     runs
@@ -452,20 +456,77 @@ mod tests {
         assert!((data[8] * data[64] / 2.0 - 4.0).abs() < 1e-4);
     }
 
+    /// A pack's `core/gui` that rebuilds each fill's rectangle from its corners, as servers'
+    /// packs round the sidebar's and the tab list's corners.
     #[test]
-    fn text_splits_from_the_rest() {
-        let vertex = |text| HudVertex {
+    fn a_packs_gui_shader_translates() {
+        let vsh = "#version 330
+            layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset; };
+            layout(std140) uniform Projection { mat4 ProjMat; };
+            in vec3 Position;
+in vec4 Color;
+            out vec4 vertexColor;
+out vec4 cornerWeight;
+out vec3 guiPos;
+            void main() {
+                gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
+                vertexColor = Color;
+                int corner = gl_VertexIndex & 3;
+                cornerWeight = vec4(corner == 0, corner == 1, corner == 2, corner == 3);
+                guiPos = vec3(Position.xy, 2.0 / ProjMat[0][0]);
+            }
+";
+        let fsh = "#version 330
+            layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset; };
+            in vec4 vertexColor;
+in vec4 cornerWeight;
+in vec3 guiPos;
+            out vec4 fragColor;
+            void main() {
+                if (cornerWeight.x > 0.5 && guiPos.x > guiPos.z) { discard; }
+                fragColor = vertexColor * ColorModulator;
+            }
+";
+        let dir = tempfile::tempdir().unwrap();
+        let (vanilla, pack) = (dir.path().join("vanilla"), dir.path().join("pack"));
+        let vanilla_fsh = "#version 330
+in vec4 vertexColor;
+out vec4 fragColor;
+            void main() {
+    fragColor = vertexColor;
+}
+";
+        for (root, fragment) in [(&vanilla, vanilla_fsh), (&pack, fsh)] {
+            let core = root.join("assets/minecraft/shaders/core");
+            std::fs::create_dir_all(&core).unwrap();
+            std::fs::write(core.join("gui.vsh"), vsh).unwrap();
+            std::fs::write(core.join("gui.fsh"), fragment).unwrap();
+        }
+        let (pack, vanilla) = (
+            ResourceSource::directory(pack),
+            ResourceSource::directory(vanilla),
+        );
+        assert!(load_core(&pack, &vanilla, "gui", &[], &GLUE).is_some());
+    }
+
+    #[test]
+    fn each_pipeline_splits_from_the_rest() {
+        let vertex = |pipeline| HudVertex {
             pos: [0.0; 2],
             uv: [0.0; 2],
             color: 0,
             depth: 0.0,
             glint_uv: [0.0; 2],
-            text,
+            pipeline,
         };
-        let vertices: Vec<HudVertex> = [0, 0, 1, 1, 1, 0].into_iter().map(vertex).collect();
+        let (native, text, gui) = (HudVertex::NATIVE, HudVertex::GUI_TEXT, HudVertex::GUI);
+        let vertices: Vec<HudVertex> = [native, native, text, text, gui, gui, native]
+            .into_iter()
+            .map(vertex)
+            .collect();
         assert_eq!(
-            text_runs(&vertices, 1..6),
-            [(1..2, false), (2..5, true), (5..6, false)]
+            pipeline_runs(&vertices, 1..7),
+            [(1..2, native), (2..4, text), (4..6, gui), (6..7, native)]
         );
     }
 }

@@ -434,7 +434,36 @@ fn coverage_uses_pack_texts_final_alpha_and_discard() {
         quad(&mut batch, Blend::Alpha, rgba(255, 255, 255, 255), x, 0.25);
     }
     for v in &mut batch.vertices {
-        v.text = 1;
+        v.pipeline = HudVertex::GUI_TEXT;
+    }
+    gpu.check(&batch, 0.0, [191, 191, 0, 0]);
+}
+
+#[test]
+fn a_pack_gui_shader_draws_the_fills() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some(mut gpu) = Gpu::new() else {
+        return;
+    };
+    let program = crate::core_shader::CoreProgram {
+        vertex: naga::front::wgsl::parse_str("@vertex fn main(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4(p.x / 2.0 - 1.0, 1.0 - p.y, 0.0, 1.0); }").unwrap(),
+        fragment: naga::front::wgsl::parse_str("@fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> { if p.x > 2.0 { discard; } return vec4(0.4, 0.2, 0.1, 0.5); }").unwrap(),
+        other: Vec::new(),
+    };
+    gpu.hud.set_gui_shader(&gpu.device, Some(&program));
+    assert!(gpu.hud.pack_gui.is_some());
+    let mut batch = HudBatch::new(
+        [4, 2],
+        crate::hud::GuiScale {
+            requested: 1,
+            unicode: false,
+        },
+    );
+    for x in [0.0, 2.0, 0.0, 2.0] {
+        quad(&mut batch, Blend::Alpha, rgba(255, 255, 255, 255), x, 0.25);
+    }
+    for v in &mut batch.vertices {
+        v.pipeline = HudVertex::GUI;
     }
     gpu.check(&batch, 0.0, [191, 191, 0, 0]);
 }

@@ -102,6 +102,9 @@ pub(super) fn build_renderer(
     renderer
         .hud
         .set_blit_shader(&renderer.device, atlas.blit_shader.as_deref());
+    renderer
+        .hud
+        .set_gui_shader(&renderer.device, atlas.gui_shader.as_deref());
     pack.item_renderer
         .prepare_glint_atlas(renderer.device.limits().max_texture_dimension_2d, filtering)?;
     renderer.set_lines_shader(atlas.lines_shader.as_deref());

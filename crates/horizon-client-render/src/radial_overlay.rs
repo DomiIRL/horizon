@@ -1401,7 +1401,7 @@ mod tests {
                     );
                     // Text only, and nowhere near a tile's chip: inside the hub's disc.
                     let inner = lay.hub + 1.0;
-                    for v in batch.vertices.iter().filter(|v| v.text != 0) {
+                    for v in batch.vertices.iter().filter(|v| v.pipeline == crate::hud::HudVertex::GUI_TEXT) {
                         let d = ((v.pos[0] - lay.cx).powi(2) + (v.pos[1] - lay.cy).powi(2)).sqrt();
                         let on_tile = (0..SLOTS).any(|t| {
                             let [x, y, w, h] = grown(lay.tile_rect(t), GROW);
