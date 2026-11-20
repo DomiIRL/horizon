@@ -107,6 +107,8 @@ pub struct HudAtlas {
     /// `misc/enchanted_glint_armor`, the armour layers' `GlintSampler`.
     pub glint_armor: (Vec<u8>, u32, u32),
     pub text_shaders: crate::gfx::core_text::TextShaders,
+    /// A resource pack's own `core/gui` for the GUI's fills ([`HudVertex::GUI`]), translated.
+    pub gui_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     /// A resource pack's own `core/rendertype_lines` shader for the block outline, translated;
     /// none draws the outline natively.
     pub lines_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
@@ -1059,6 +1061,7 @@ impl HudAtlas {
             glint: (Vec::new(), 1, 1),
             glint_armor: (Vec::new(), 1, 1),
             text_shaders: Default::default(),
+            gui_shader: None,
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
@@ -1128,6 +1131,7 @@ impl HudAtlas {
             glint_armor: (vec![0; 4], 1, 1),
             white,
             text_shaders: Default::default(),
+            gui_shader: None,
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
@@ -1690,6 +1694,7 @@ impl HudAtlas {
             glint,
             glint_armor,
             text_shaders: Default::default(),
+            gui_shader: None,
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
@@ -1728,9 +1733,17 @@ pub struct HudVertex {
     /// The `GLINT_TEXTURING` UV into the repeating glint texture, unused
     /// unless `uv.x >= 2`.
     pub glint_uv: [f32; 2],
-    /// 1 for the GUI's text (`RenderPipelines.GUI_TEXT`), which a resource
-    /// pack's text shader draws when it has one.
-    pub text: u32,
+    /// The vanilla pipeline whose resource pack core shader draws this vertex
+    /// when a pack has one: [`Self::GUI_TEXT`], [`Self::GUI`] or [`Self::NATIVE`].
+    pub pipeline: u32,
+}
+impl HudVertex {
+    /// Drawn natively whatever the packs replace.
+    pub const NATIVE: u32 = 0;
+    /// The GUI's text (`RenderPipelines.GUI_TEXT`, `core/text` with `IS_GUI`).
+    pub const GUI_TEXT: u32 = 1;
+    /// `GuiGraphics.fill` and `fillGradient` (`RenderPipelines.GUI`, `core/gui`).
+    pub const GUI: u32 = 2;
 }
 /// Sutherland-Hodgman against one half plane, interpolating every attribute.
 fn clip_polygon(poly: &[HudVertex], axis: usize, limit: f32, keep_below: bool) -> Vec<HudVertex> {
@@ -1959,7 +1972,7 @@ impl HudBatch {
                 color,
                 depth: 0.0,
                 glint_uv: [0.0, 0.0],
-                text: 0,
+                pipeline: HudVertex::NATIVE,
             });
         }
     }
@@ -1979,7 +1992,7 @@ impl HudBatch {
                 color,
                 depth: 0.0,
                 glint_uv: glint_uv[i],
-                text: 0,
+                pipeline: HudVertex::NATIVE,
             });
         }
     }
@@ -1991,7 +2004,7 @@ impl HudBatch {
                 color,
                 depth: p[i][2],
                 glint_uv: [0.0, 0.0],
-                text: 0,
+                pipeline: HudVertex::NATIVE,
             });
         }
     }
@@ -2015,7 +2028,7 @@ impl HudBatch {
                 color: u32::MAX,
                 depth: p[i][2],
                 glint_uv: glint_uv[i],
-                text: 0,
+                pipeline: HudVertex::NATIVE,
             });
         }
     }
@@ -2202,13 +2215,22 @@ impl HudBatch {
         r.u1 = cu;
         r.v0 = cv;
         r.v1 = cv;
+        let start = self.vertices.len();
         self.rect_uv(x, y, w, h, r, color);
+        self.gui_since(start);
     }
     /// Any four-cornered shape in one colour, corners in order round it.
     pub fn fill_quad(&mut self, atlas: &HudAtlas, corners: [[f32; 2]; 4], color: u32) {
         let w = atlas.white;
         let uv = [(w.u0 + w.u1) / 2.0, (w.v0 + w.v1) / 2.0];
+        let start = self.vertices.len();
         self.quad(corners, [uv; 4], color);
+        self.gui_since(start);
+    }
+    fn gui_since(&mut self, start: usize) {
+        for v in &mut self.vertices[start..] {
+            v.pipeline = HudVertex::GUI;
+        }
     }
     /// GuiGraphics.fillGradient: `top` to `bottom`, down the rectangle.
     pub fn fill_gradient(
@@ -2229,7 +2251,7 @@ impl HudBatch {
                 color: c[i],
                 depth: 0.0,
                 glint_uv: [0.0, 0.0],
-                text: 0,
+                pipeline: HudVertex::GUI,
             });
         }
     }
@@ -2526,7 +2548,7 @@ impl HudBatch {
                 lift(self, start, base + 0.01);
                 if !world {
                     for v in &mut self.vertices[glyph..] {
-                        v.text = 1;
+                        v.pipeline = HudVertex::GUI_TEXT;
                     }
                 }
             }
@@ -2682,6 +2704,8 @@ pub struct HudRenderer {
     atlas_view: wgpu::TextureView,
     /// The resource pack's text shader, when it has one that works.
     pack_text: Option<pack_text::PackText>,
+    /// The resource pack's `core/gui`, when it has one that works.
+    pack_gui: Option<pack_text::PackText>,
     /// Target pixels per window pixel: above 1 for a screenshot drawn larger than the
     /// window (`Renderer::screenshot_quality`).
     pub zoom: f32,
@@ -2965,6 +2989,7 @@ impl HudRenderer {
             coverage,
             atlas_view: view.clone(),
             pack_text: None,
+            pack_gui: None,
             zoom: 1.0,
         })
     }
@@ -2987,7 +3012,31 @@ impl HudRenderer {
         shader: Option<&crate::core_shader::CoreProgram>,
     ) {
         self.pack_text = shader.and_then(|shader| {
-            pack_text::PackText::new(device, self.format, &self.atlas_view, shader, self.coverage)
+            pack_text::PackText::new(
+                device,
+                self.format,
+                &self.atlas_view,
+                shader,
+                self.coverage,
+                "text",
+            )
+        });
+    }
+    /// Draw the GUI's fills with `shader` (`HudAtlas::gui_shader`), or natively.
+    pub fn set_gui_shader(
+        &mut self,
+        device: &wgpu::Device,
+        shader: Option<&crate::core_shader::CoreProgram>,
+    ) {
+        self.pack_gui = shader.and_then(|shader| {
+            pack_text::PackText::new(
+                device,
+                self.format,
+                &self.atlas_view,
+                shader,
+                self.coverage,
+                "gui",
+            )
         });
     }
     /// Stage `patches` into the shared atlas texture.
@@ -3068,8 +3117,8 @@ impl HudRenderer {
                 batch.glint_colour,
             )),
         );
-        if let Some(pack_text) = &self.pack_text {
-            pack_text.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
+        for pack in [&self.pack_text, &self.pack_gui].into_iter().flatten() {
+            pack.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
         }
     }
     /// Draw the batch `prepare` staged.
@@ -3192,21 +3241,23 @@ impl HudRenderer {
                     }
                 };
                 let pipeline = pipeline.get(coverage.is_some());
-                match &self.pack_text {
-                    Some(pack_text) if *blend == Blend::Alpha => {
-                        for (part, text) in pack_text::text_runs(&batch.vertices, range.clone()) {
-                            if text {
-                                pack_text.draw(&mut pass, part, coverage.is_some());
-                                pass.set_bind_group(0, &self.group, &[]);
-                            } else {
-                                pass.set_pipeline(pipeline);
-                                pass.draw(part, 0..1);
-                            }
-                        }
-                    }
-                    _ => {
+                if *blend != Blend::Alpha || (self.pack_text.is_none() && self.pack_gui.is_none()) {
+                    pass.set_pipeline(pipeline);
+                    pass.draw(range.clone(), 0..1);
+                    continue;
+                }
+                for (part, kind) in pack_text::pipeline_runs(&batch.vertices, range.clone()) {
+                    let pack = match kind {
+                        HudVertex::GUI_TEXT => self.pack_text.as_ref(),
+                        HudVertex::GUI => self.pack_gui.as_ref(),
+                        _ => None,
+                    };
+                    if let Some(pack) = pack {
+                        pack.draw(&mut pass, part, coverage.is_some());
+                        pass.set_bind_group(0, &self.group, &[]);
+                    } else {
                         pass.set_pipeline(pipeline);
-                        pass.draw(range.clone(), 0..1);
+                        pass.draw(part, 0..1);
                     }
                 }
             }
@@ -3222,6 +3273,44 @@ mod coverage_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fills_are_the_gui_pipelines_and_text_its_text_pipelines() {
+        let atlas = HudAtlas::build(&ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap();
+        let mut batch = HudBatch::scratch([320, 240]);
+        let pipelines = |batch: &mut HudBatch, draw: &dyn Fn(&mut HudBatch)| {
+            let start = batch.vertices.len();
+            draw(batch);
+            let drawn: Vec<u32> = batch.vertices[start..].iter().map(|v| v.pipeline).collect();
+            assert!(!drawn.is_empty());
+            drawn
+        };
+        let gui = |drawn: Vec<u32>| drawn.iter().all(|p| *p == HudVertex::GUI);
+        assert!(gui(pipelines(&mut batch, &|b| b.fill(
+            &atlas,
+            1.0,
+            1.0,
+            8.0,
+            9.0,
+            u32::MAX
+        ))));
+        let corners = [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]];
+        assert!(gui(pipelines(&mut batch, &|b| b.fill_quad(
+            &atlas,
+            corners,
+            u32::MAX
+        ))));
+        assert!(gui(pipelines(&mut batch, &|b| {
+            b.fill_gradient(&atlas, (0.0, 0.0, 4.0, 4.0), u32::MAX, 0)
+        })));
+        let text = pipelines(&mut batch, &|b| {
+            b.text(&atlas, "Ab", 0.0, 0.0, u32::MAX, false);
+        });
+        assert!(text.iter().all(|p| *p == HudVertex::GUI_TEXT));
+    }
 
     #[test]
     fn scratch_batch_ignores_view_settings() {
@@ -3581,7 +3670,7 @@ mod tests {
         batch.clip_since(start, 0.0, 0.0, 16.0, 16.0);
         assert_eq!(batch.vertices.len(), before.len());
         for (v, w) in batch.vertices.iter().zip(&before) {
-            assert_eq!((v.pos, v.color, v.text), (w.pos, w.color, w.text));
+            assert_eq!((v.pos, v.color, v.pipeline), (w.pos, w.color, w.pipeline));
             let near = |a: f32, b: f32| (a - b).abs() < 1e-6;
             assert!(near(v.depth, w.depth), "depth {} vs {}", v.depth, w.depth);
             assert!(near(v.uv[0], w.uv[0]) && near(v.uv[1], w.uv[1]));

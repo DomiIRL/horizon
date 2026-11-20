@@ -44,7 +44,7 @@ fn assert_icon(batch: &HudBatch, x: f32, y: f32, foil: bool, damaged: bool) {
     // Count 3 is drawn in the icon's lower-right corner, not a default count 1.
     assert!(
         batch.vertices.iter().any(|v| {
-            v.text == 1
+            v.pipeline == horizon_client_render::hud::HudVertex::GUI_TEXT
                 && (x + 9.0..=x + 17.0).contains(&v.pos[0])
                 && (y + 9.0..=y + 18.0).contains(&v.pos[1])
         }),

@@ -77,7 +77,7 @@ mod tests {
         batch
             .vertices
             .iter()
-            .map(|v| (v.pos, v.uv, v.color, v.text))
+            .map(|v| (v.pos, v.uv, v.color, v.pipeline))
             .collect()
     }
 
